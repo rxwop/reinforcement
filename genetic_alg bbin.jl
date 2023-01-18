@@ -1,5 +1,5 @@
-include("substitution.jl")
-include("tuco.jl")
+push!(LOAD_PATH, raw"C:\Users\robiw\OneDrive\Documents\0_vscode\cipherengine")
+using rxciphers
 
 
 function next_parent_dF(children::Vector{T}, child_dF::Vector{Float64}, lineage_habit = :ascent; parent::T) where T

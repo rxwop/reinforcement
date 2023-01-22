@@ -1,5 +1,4 @@
-include("substitution.jl")
-include("tuco.jl")
+include("rxciphers compat.jl")
 import LinearAlgebra.checksquare, Base.getindex, Base.setindex!
 import StatsBase.sample, StatsBase.pweights
 
@@ -28,7 +27,7 @@ function PosProbMatrix(n::Int, update_rate::Float64) ::PosProbMatrix
 end
 
 function PosProbMatrix(a::Matrix{Float64}, update_rate::Float64) ::PosProbMatrix
-    return PosProbMatrix(normalise!(clamp.(a, 0., 1.); dims = 2), checksquare(a), update_rate)
+    return PosProbMatrix(normalise!(clamp.(a, 0., 1.), 2), checksquare(a), update_rate)
 end
 
 function set_xy!(ppm::PosProbMatrix, x_to_y::Vector{Int})

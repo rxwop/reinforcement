@@ -1,5 +1,4 @@
 include("permutation.jl")
-include("tuco.jl")
 import LinearAlgebra.checksquare, Base.getindex, Base.setindex!
 import StatsBase.sample, StatsBase.pweights
 
@@ -28,7 +27,7 @@ function SsrProbMatrix(n::Int, update_rate::Float64) ::SsrProbMatrix
 end
 
 function SsrProbMatrix(a::Matrix{Float64}, update_rate::Float64) ::SsrProbMatrix
-    return SsrProbMatrix(normalise!(clamp.(a, 0., 1.); dims = 2), checksquare(a), update_rate)
+    return SsrProbMatrix(normalise!(clamp.(a, 0., 1.), 2), checksquare(a), update_rate)
 end
 
 function set_xy!(spm::SsrProbMatrix, x_to_y::Vector{Int})

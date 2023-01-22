@@ -1,6 +1,4 @@
-include("charspace.jl")
-include("cipher.jl")
-include("array functions.jl")
+include("rxciphers compat.jl")
 import Base.show
 using Combinatorics
 

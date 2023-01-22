@@ -1,5 +1,3 @@
-push!(LOAD_PATH, raw"C:\Users\robiw\OneDrive\Documents\0_vscode\cipherengine")
-using rxciphers
 
 
 function next_parent_dF(children::Vector{T}, child_dF::Vector{Float64}, lineage_habit = :ascent; parent::T) where T
@@ -58,7 +56,7 @@ end
 
 # fitness_log starts from g = 0
 # Solves for the inverse substitution
-function bench_substitution_solve(start_parent::Substitution, inv_target::Substitution, txt::Txt, gen::Int, spawns::Int; lineage_habit = :ascent; ref_frequencies::Vector{Float64} = monogram_freq)
+function bench_substitution_solve(start_parent::Substitution, inv_target::Substitution, txt::Txt, gen::Int, spawns::Int; lineage_habit = :ascent, ref_frequencies::Vector{Float64} = monogram_freq)
     parent = start_parent
     parent_f = quadgramlog(parent(txt))
 

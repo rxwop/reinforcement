@@ -124,7 +124,7 @@ function draw(spm::SsrProbMatrix, number::Int, f::Function = identity) ::Vector{
     end
 
     for i in 1:spm.size
-        draw_matrix[i, i] = 0. # dodgy
+        draw_matrix[i, i] = 0.
     end
 
     samples = sample(spm.indices, pweights( draw_matrix ), number, replace = false) # Vector{Tuple} (x1, y2)

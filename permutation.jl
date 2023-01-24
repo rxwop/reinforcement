@@ -1,4 +1,4 @@
-include("rxciphers compat.jl")
+using RxCiphers
 import Base.show
 using Combinatorics
 

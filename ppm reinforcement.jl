@@ -1,4 +1,4 @@
-include("rxciphers compat.jl")
+using RxCiphers
 import LinearAlgebra.checksquare, Base.getindex, Base.setindex!
 import StatsBase.sample, StatsBase.pweights
 

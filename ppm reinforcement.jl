@@ -338,9 +338,6 @@ function substitution_solve(
 
     parent_fitness = quadgramlog(apply(parent_sub, txt))
 
-    gr(format=:png)
-    p = heatmap(ppm.arr, clims = (0, 1), aspect_ratio = :equal, xlabel = "x", ylabel = "y", xticks = false, yticks = false)
-
     for gen in 1:generations
         swaps = draw(ppm, spawns)
         new_substitutions = [switch(parent_sub, y1, y2) for (x1, x2, y1, y2) in swaps]

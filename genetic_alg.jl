@@ -1,5 +1,3 @@
-include("substitution.jl")
-include("tuco.jl")
 
 
 function next_parent_dF(children::Vector{T}, child_dF::Vector{Float64}, lineage_habit = :ascent; parent::T) where T

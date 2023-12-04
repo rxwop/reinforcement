@@ -4,18 +4,37 @@ import StatsBase.sample, StatsBase.pweights
 import Statistics.mean
 
 
-mutable struct SsrProbMatrix
-    arr::Matrix{Float64}
+function normalise_nodiag!(arr::Matrix{AbstractFloat}, dims) ::Matrix{AbstractFloat}
+    arr ./= (sum(arr; dims = dims) - sum(diag(arr)))
+    return arr
+end
+
+mutable struct SsrProbMatrix{T <: AbstractFloat}
+    arr::Matrix{T}
+
+    # activation must map : [-Inf, Inf] -> [0, Inf]
+    activation::Function
+    prob::Matrix{T}
+    needs_recalc::Bool
+    
     xy::Vector{Int}
     yx::Vector{Int}
 
     size::Int
-    update_rate::Float64
+    update_rate::T
 
     indices::CartesianIndices{2, Tuple{Base.OneTo{Int64}, Base.OneTo{Int64}}}
 
-    function SsrProbMatrix(arr::Matrix{Float64}, size::Int, update_rate::Float64)
-        x = new(arr)
+    function SsrProbMatrix{T}(arr::Matrix{Float64}, size::Int, activation::Function, update_rate::Float64)
+        x = new{T}(arr)
+        x.prob = normalise_nodiag!(activation.(arr), 2)
+        for i in 1:size
+            x.prob[i,i] = 0.
+        end
+
+        x.activation = activation
+        x.needs_recalc = false
+
         x.size = size
         x.update_rate = update_rate
         x.indices = CartesianIndices((size, size))
@@ -23,24 +42,14 @@ mutable struct SsrProbMatrix
     end
 end
 
-function SsrProbMatrix(n::Int, update_rate::Float64) ::SsrProbMatrix
-    m = fill(1 / (n-1), (n,n))
-    for i in 1:n
-        m[i, i] = 0.
-    end
+default_activation(f) = 1 + tanh(1000 * f)
 
-    return SsrProbMatrix(m, n, update_rate)
+function SsrProbMatrix{T}(n::Int, update_rate::T; activation::Function = default_activation) ::SsrProbMatrix{T} where T <: AbstractFloat
+    return SsrProbMatrix{T}(zeros(T, n, n), n, activation, update_rate)
 end
 
-function SsrProbMatrix(a::Matrix{Float64}, update_rate::Float64) ::SsrProbMatrix
-    n = checksquare(a)
-
-    m = clamp.(a, 0., 1.)
-    for i in 1:n
-        m[i, i] = 0.
-    end
-    
-    return SsrProbMatrix(normalise!(m, 2), n, update_rate)
+function SsrProbMatrix{T}(a::Matrix{Float64}, update_rate::Float64; activation::Function = default_activation) ::SsrProbMatrix{T} where T <: AbstractFloat
+    return SsrProbMatrix{T}(a, checksquare(a), activation, update_rate)
 end
 
 function set_xy!(spm::SsrProbMatrix, x_to_y::Vector{Int})
@@ -67,16 +76,24 @@ function set_yx!(spm::SsrProbMatrix, y_to_x::Vector{Int})
     return spm
 end
 
+function recalculate_prob!(spm::SsrProbMatrix) ::SsrProbMatrix
+    if spm.needs_recalc
+        spm.prob = normalise_nodiag!(spm.activation.(spm.arr), 2)
+        spm.needs_recalc = false
+    end
 
+    return spm
+end
 
-
-getindex(spm::SsrProbMatrix, args...) = getindex(spm.arr, args...)
+getprob!(spm::SsrProbMatrix) = recalculate_prob!(spm).prob
+getprob(spm::SsrProbMatrix) = copy(getprob!(spm))
+getindex(spm::SsrProbMatrix, args...) = getindex(getprob!(spm), args...)
 
 
 function update!(spm::SsrProbMatrix, x1::Int, x2::Int, x3::Int, y1::Int, y2::Int, y3::Int, dF::Float64) ::SsrProbMatrix
-    d1 = update_delta(dF, spm[x1, y1], spm[x1, y2], spm.update_rate)
-    d2 = update_delta(dF, spm[x2, y2], spm[x2, y3], spm.update_rate)
-    d3 = update_delta(dF, spm[x3, y3], spm[x3, y1], spm.update_rate)
+    d1 = dF * spm.update_rate
+    d2 = dF * spm.update_rate
+    d3 = dF * spm.update_rate
 
     spm.arr[x1, y1] -= d1
     spm.arr[x1, y2] += d1
@@ -87,42 +104,9 @@ function update!(spm::SsrProbMatrix, x1::Int, x2::Int, x3::Int, y1::Int, y2::Int
     spm.arr[x3, y3] -= d3
     spm.arr[x3, y1] += d3
 
-    for i in (x1, x2, x3)
-        for j in (y1, y2, y3)
-            spm.arr[i,j] = clamp(spm.arr[i,j], 0., 1.)
-        end
-    end
+    spm.needs_recalc = true
 
     return spm
-end
-
-# ZEROS ARE STUCK
-# Limiting function taking (-inf, inf) -> (-p_new, p_old), with update_delta(0) == 0
-function update_delta(delta_fitness::Float64, p_old::Float64, p_new::Float64, rate::Float64) ::Float64
-
-    if p_old == 0. || p_new == 0.
-        return 0.
-    end
-
-    if rate == Inf # maximum learn rate
-        if delta_fitness == 0.
-            return 0.0
-        elseif delta_fitness > 0.
-            return p_old
-        else
-            return (- p_new)
-        end
-    end
-
-
-    mu = p_old + p_new # division by 2 carried out at the end
-    diff = p_old - p_new # division by 2 carried out at the end
-
-    z = coth(rate * delta_fitness)
-
-    delta = 2 * p_old * p_new / (mu * z - diff)
-
-    return clamp(delta, - p_new, p_old)
 end
 
 
@@ -130,14 +114,10 @@ bernoulli(w::Float64) = rand() < w
 import Statistics.stdm
 function draw(spm::SsrProbMatrix, number::Int, f::Function = identity) ::Vector{NTuple{6, Int}}
     
-    draw_matrix = f(copy(spm.arr))
+    draw_matrix = f(getprob(spm))
 
     for (x,y) in enumerate(spm.xy)
         draw_matrix[x,y] = 0.
-    end
-
-    for i in 1:spm.size
-        draw_matrix[i, i] = 0.
     end
 
     samples = sample(spm.indices, pweights( draw_matrix ), number, replace = false) # Vector{Tuple} (x1, y2)
@@ -347,18 +327,8 @@ end
 
 
 function forget!(spm::SsrProbMatrix, a::Float64)
-
-    S_bar = 1 / (spm.size - 1)
-    spm.arr .-= S_bar
     spm.arr *= a
-    spm.arr .+= S_bar
-
-    @inbounds for i in 1:spm.size
-        spm.arr[i, i] = 0.
-    end
-
     return spm
-
 end
 
 
@@ -473,10 +443,10 @@ mutable struct PermutationSolve
             blanks = ones(Float64, (S, S)) # For the extra split token
             blanks[1:N, 1:N] = follow_scr # stitch in the follow matrix
             blanks[1:N, S] = mean(follow_scr; dims = 2)
-            spm = SsrProbMatrix(blanks, reinforce_rate)
+            spm = SsrProbMatrix{Float64}(blanks, reinforce_rate)
             
         else
-            spm = SsrProbMatrix(S, reinforce_rate)
+            spm = SsrProbMatrix{Float64}(S, reinforce_rate)
         end
         set_xy!(spm, splitsuccessors(start.permutation))
 

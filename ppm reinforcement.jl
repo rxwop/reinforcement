@@ -270,12 +270,20 @@ function substitution_solve(
         bbin = true
     )
 
+    b_fit = -Inf
+    b_parent = solver.parent
+
     for i in 1:generations
         nextgen!(solver)
+
+        if solver.fitness > b_fit
+            b_fit = solver.fitness
+            b_parent = solver.parent
+        end
     end
 
-    return invert!(solver.parent), solver.ppm
-    # final Substitution in lineage // Reinforced Matrix
+    return invert!(b_parent), solver.ppm
+    # best Substitution in lineage // Reinforced Matrix
 end
 
 

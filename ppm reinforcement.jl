@@ -3,18 +3,28 @@ import LinearAlgebra.checksquare, Base.getindex, Base.setindex!
 import StatsBase.sample, StatsBase.pweights
 
 
-mutable struct PosProbMatrix
-    arr::Matrix{Float64}
+mutable struct PosProbMatrix{T <: AbstractFloat}
+    arr::Matrix{T}
+
+    # activation must map : [-Inf, Inf] -> [0, Inf]
+    activation::Function
+    prob::Matrix{T}
+    needs_recalc::Bool
+
     xy::Vector{Int}
     yx::Vector{Int}
 
     size::Int
-    update_rate::Float64
+    update_rate::T
 
     indices::CartesianIndices{2, Tuple{Base.OneTo{Int64}, Base.OneTo{Int64}}}
 
-    function PosProbMatrix(arr::Matrix{Float64}, size::Int, update_rate::Float64)
-        x = new(arr)
+    function PosProbMatrix{T}(arr::Matrix{T}, size::Int, activation::Function, update_rate::T) where T <: AbstractFloat
+        x = new{T}(arr)
+        x.prob = normalise!(activation.(arr), 2)
+        x.activation = activation
+        x.needs_recalc = false
+
         x.size = size
         x.update_rate = update_rate
         x.indices = CartesianIndices((size, size))
@@ -22,12 +32,14 @@ mutable struct PosProbMatrix
     end
 end
 
-function PosProbMatrix(n::Int, update_rate::Float64) ::PosProbMatrix
-    return PosProbMatrix(fill(1 / n, (n,n)), n, update_rate)
+default_activation(f) = 1 + tanh(1000 * f)
+
+function PosProbMatrix{T}(n::Int, update_rate::T; activation::Function = default_activation) ::PosProbMatrix{T} where T <: AbstractFloat
+    return PosProbMatrix{T}(zeros(T, n, n), n, activation, update_rate)
 end
 
-function PosProbMatrix(a::Matrix{Float64}, update_rate::Float64) ::PosProbMatrix
-    return PosProbMatrix(normalise!(clamp.(a, 0., 1.), 2), checksquare(a), update_rate)
+function PosProbMatrix{T}(a::Matrix{T}, update_rate::T; activation::Function = default_activation) ::PosProbMatrix{T} where T <: AbstractFloat
+    return PosProbMatrix{T}(a, checksquare(a), activation, update_rate)
 end
 
 function set_xy!(ppm::PosProbMatrix, x_to_y::Vector{Int})
@@ -55,14 +67,22 @@ function set_yx!(ppm::PosProbMatrix, y_to_x::Vector{Int})
 end
 
 
+function recalculate_prob!(ppm::PosProbMatrix) ::PosProbMatrix
+    if ppm.needs_recalc
+        ppm.prob = normalise!(ppm.activation.(ppm.arr), 2)
+        ppm.needs_recalc = false
+    end
 
+    return ppm
+end
 
-getindex(ppm::PosProbMatrix, args...) = getindex(ppm.arr, args...)
+getprob!(ppm::PosProbMatrix) = recalculate_prob!(ppm).prob
+getprob(ppm::PosProbMatrix) = copy(getprob!(ppm))
+getindex(ppm::PosProbMatrix, args...) = getindex(getprob!(ppm), args...)
 
-
-function update!(ppm::PosProbMatrix, x1::Int, x2::Int, y1::Int, y2::Int, dF::Float64) ::PosProbMatrix
-    d1 = update_delta(dF, ppm[x1, y1], ppm[x1, y2], ppm.update_rate)
-    d2 = update_delta(dF, ppm[x2, y2], ppm[x2, y1], ppm.update_rate)
+function update!(ppm::PosProbMatrix{T}, x1::Int, x2::Int, y1::Int, y2::Int, dF::T) ::PosProbMatrix{T} where T <: AbstractFloat
+    d1 = dF * ppm.update_rate
+    d2 = dF * ppm.update_rate
 
     ppm.arr[x1, y1] -= d1
     ppm.arr[x1, y2] += d1
@@ -70,55 +90,22 @@ function update!(ppm::PosProbMatrix, x1::Int, x2::Int, y1::Int, y2::Int, dF::Flo
     ppm.arr[x2, y2] -= d2
     ppm.arr[x2, y1] += d2
 
-    for i in (x1, x2)
-        for j in (y1, y2)
-            ppm.arr[i,j] = clamp(ppm.arr[i,j], 0., 1.)
-        end
-    end
+    ppm.needs_recalc = true
 
     return ppm
-end
-
-# ZEROS ARE STUCK
-# Limiting function taking (-inf, inf) -> (-p_new, p_old), with update_delta(0) == 0
-function update_delta(delta_fitness::Float64, p_old::Float64, p_new::Float64, rate::Float64) ::Float64
-
-    if p_old == 0. || p_new == 0.
-        return 0.
-    end
-
-    if rate == Inf # maximum learn rate
-        if delta_fitness == 0.
-            return 0.0
-        elseif delta_fitness > 0.
-            return p_old
-        else
-            return (- p_new)
-        end
-    end
-
-
-    mu = p_old + p_new # division by 2 carried out at the end
-    diff = p_old - p_new # division by 2 carried out at the end
-
-    z = coth(rate * delta_fitness)
-
-    delta = 2 * p_old * p_new / (mu * z - diff)
-
-    return clamp(delta, - p_new, p_old)
 end
 
 
 # choice weights / bias
 function draw(ppm::PosProbMatrix, number::Int, f::Function = identity) ::Vector{Tuple{Int, Int, Int, Int}}
 
-    draw_matrix = f(copy(ppm.arr))
+    draw_matrix = f(getprob(ppm))
 
     for (x,y) in enumerate(ppm.xy)
         draw_matrix[x,y] = 0.
     end
 
-    samples = sample(ppm.indices, pweights( draw_matrix .+ 1e-320 ), number, replace = false) # Vector{Tuple} (x1, y2)
+    samples = sample(ppm.indices, pweights( draw_matrix ), number, replace = false) # Vector{Tuple} (x1, y2)
 
     x1 = [i[1] for i in samples]
     y2 = [i[2] for i in samples]
@@ -291,7 +278,7 @@ end
 
 using LinearAlgebra
 perm_matrix(permutation) = Matrix{Float64}(I, length(permutation), length(permutation))[invperm(permutation), :]
-
+perm_matrix(perma, permb) = perm_matrix(invperm(perma)[checkperm(permb)])
 
 mutable struct SubstitutionSolve
     text::Txt
@@ -313,9 +300,9 @@ mutable struct SubstitutionSolve
         )
 
         if bbin
-            ppm = PosProbMatrix(bbin_probabilities(text, ref_freq), reinforce_rate)
+            ppm = PosProbMatrix{Float64}(bbin_probabilities(text, ref_freq), reinforce_rate)
         else
-            ppm = PosProbMatrix(26, reinforce_rate)
+            ppm = PosProbMatrix{Float64}(26, reinforce_rate)
         end
         set_yx!(ppm, start.mapping)
 

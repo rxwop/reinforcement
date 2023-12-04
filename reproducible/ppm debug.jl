@@ -13,7 +13,7 @@ texts = [orwell, adfgvx, jmacro]
 
 # Parameters of data collection
 G_set = 60
-plot_lineage_certainty = true
+plot_lineage_certainty = false
 
 
 print("Beginning...")
@@ -45,7 +45,7 @@ arr_size = solver.ppm.size
 
 gr(format=:png)
 p1 = heatmap(
-    permutedims(solver.ppm.arr),
+    permutedims(getprob!(solver.ppm)),
     clims = (0, 1),
     c = cgrad(:matter, rev = true),
     aspect_ratio = :equal,
@@ -141,7 +141,7 @@ anim = @animate for i in 1:G_set
     end
 
     # Plot ppM
-    p[1][1][:z] = solver.ppm.arr
+    p[1][1][:z] = getprob!(solver.ppm)
     p[3][1][:z] = perm_matrix(inv_rand_target.mapping, solver.parent.mapping)
 
 

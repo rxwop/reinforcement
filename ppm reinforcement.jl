@@ -291,7 +291,7 @@ end
 
 using LinearAlgebra
 perm_matrix(permutation) = Matrix{Float64}(I, length(permutation), length(permutation))[invperm(permutation), :]
-
+perm_matrix(perma, permb) = perm_matrix(invperm(perma)[checkperm(permb)])
 
 mutable struct SubstitutionSolve
     text::Txt

@@ -118,7 +118,7 @@ function draw(ppm::PosProbMatrix, number::Int, f::Function = identity) ::Vector{
         draw_matrix[x,y] = 0.
     end
 
-    samples = sample(ppm.indices, pweights( draw_matrix ), number, replace = false) # Vector{Tuple} (x1, y2)
+    samples = sample(ppm.indices, pweights( draw_matrix .+ 1e-320 ), number, replace = false) # Vector{Tuple} (x1, y2)
 
     x1 = [i[1] for i in samples]
     y2 = [i[2] for i in samples]
@@ -216,6 +216,15 @@ function ppm_kldiv(ppm::PosProbMatrix, target_x_to_y::Vector{Int}, ref_freq::Vec
 end
 
 
+function lineage_certainty(ppm::PosProbMatrix)
+    avg = 0.
+
+    for x in 1:ppm.size
+        avg += ppm[x, ppm.xy[x]]
+    end
+
+    return avg / ppm.size
+end
 
 
 
@@ -242,124 +251,31 @@ using Plots
 # x (token) -> y (position in sub mapping)
 # this solves for the inverse substitution, then inverts it
 # Substitution solver, where ppM supervises a single substitution lineage
-function debug_substitution_solve(
-    target::Substitution,
-    txt::Txt,
-    generations::Int,
-    spawns::Int,
-    reinforce_rate::Float64 = 0.5;
-    lineage_habit::Symbol = :ascent,
-    frame_skip::Int = 1,
-    ref_freq::Vector{Float64} = monogram_freq
-)
-
-    fitness_log = Vector{Float64}(undef, generations + 1)
-    div_log = Vector{Float64}(undef, generations + 1)
-
-
-
-    parent_sub = frequency_matched_Substitution(txt, ref_freq) # guesses FORWARDS substitution
-    invert!(parent_sub)
-
-    ppm = PosProbMatrix(bbin_probabilities(txt, ref_freq), reinforce_rate)
-    set_yx!(ppm, parent_sub.mapping)
-
-
-
-    parent_fitness = quadgramlog(apply(parent_sub, txt))
-    fitness_log[1] = parent_fitness
-    div_log[1] = ppm_kldiv(ppm, target.mapping)
-
-    gr(format=:png)
-    p = heatmap(ppm.arr, clims = (0, 1), aspect_ratio = :equal, xlabel = "x", ylabel = "y", xticks = false, yticks = false)
-
-    anim = @animate for gen in 1:generations
-        println(gen)
-        swaps = draw(ppm, spawns)
-        new_substitutions = [switch(parent_sub, y1, y2) for (x1, x2, y1, y2) in swaps]
-        delta_F = [quadgramlog(new_sub(txt)) for new_sub in new_substitutions] .- parent_fitness
-        # generates new swaps from ppM and calculates dF
-
-
-        for ((x1, x2, y1, y2), dF) in zip(swaps, delta_F) # Update P with ALL the data
-            update!(ppm, x1, x2, y1, y2, dF)
-        end
-
-
-        parent_sub, dF = next_parent_dF(ppm, swaps, new_substitutions, delta_F, lineage_habit; parent = parent_sub)
-        parent_fitness += dF
-        # advance lineage
-
-
-        fitness_log[gen + 1] = parent_fitness
-        div_log[gen + 1] = ppm_kldiv(ppm, target.mapping)
-
-        p[1][1][:z] = ppm.arr
-        # scatter!([i[4] for i in swaps], [i[1] for i in swaps], color = :blue, markershape = :rect, label = false)
-        # scatter!([i[3] for i in swaps], [i[2] for i in swaps], color = :blue, markershape = :rect, label = false)
-        # scatter!([i[3] for i in swaps], [i[1] for i in swaps], color = :blue, markershape = :rect, label = false)
-        # scatter!([i[4] for i in swaps], [i[2] for i in swaps], color = :blue, markershape = :rect, label = false)
-    end every frame_skip
-
-    
-    gif(anim, "anim.gif")
-
-    invert!(parent_sub) # return the "solved" FORWARDS substitution
-
-    return ppm, parent_sub, fitness_log, div_log
-    # Reinforced Matrix // final Substitution in lineage // Vector of fitness values vs generations // Vector of divergence vs gen
-end
-
-
-
-
-
-
-
-
 
 function substitution_solve(
     txt::Txt,
-    generations::Int,
-    spawns::Int,
-    reinforce_rate::Float64 = 0.5;
-    lineage_habit::Symbol = :ascent,
+    generations::Int = 75,
+    spawns::Int = 7,
+    reinforce_rate::Float64 = 25.;
+    lineage_habit::Symbol = :fascent,
     ref_freq::Vector{Float64} = monogram_freq
 )
+    solver = SubstitutionSolve(
+        txt,
+        frequency_matched_Substitution(txt, ref_freq),
+        spawns,
+        reinforce_rate;
+        lineage_habit = lineage_habit,
+        ref_freq = ref_freq,
+        bbin = true
+    )
 
-
-    parent_sub = frequency_matched_Substitution(txt, ref_freq) # guesses FORWARDS substitution
-    invert!(parent_sub)
-
-    ppm = PosProbMatrix(bbin_probabilities(txt, ref_freq), reinforce_rate)
-    set_yx!(ppm, parent_sub.mapping)
-
-
-
-    parent_fitness = quadgramlog(apply(parent_sub, txt))
-
-    for gen in 1:generations
-        swaps = draw(ppm, spawns)
-        new_substitutions = [switch(parent_sub, y1, y2) for (x1, x2, y1, y2) in swaps]
-        delta_F = [quadgramlog(new_sub(txt)) for new_sub in new_substitutions] .- parent_fitness
-        # generates new swaps from ppM and calculates dF
-
-
-        for ((x1, x2, y1, y2), dF) in zip(swaps, delta_F) # Update P with ALL the data
-            update!(ppm, x1, x2, y1, y2, dF)
-        end
-
-
-        parent_sub, dF = next_parent_dF(ppm, swaps, new_substitutions, delta_F, lineage_habit; parent = parent_sub)
-        parent_fitness += dF
-        # advance lineage
+    for i in 1:generations
+        nextgen!(solver)
     end
 
-
-    invert!(parent_sub) # return the "solved" FORWARDS substitution
-
-    return ppm, parent_sub
-    # Reinforced Matrix // final Substitution in lineage
+    return invert!(solver.parent), solver.ppm
+    # final Substitution in lineage // Reinforced Matrix
 end
 
 
@@ -376,265 +292,59 @@ end
 using LinearAlgebra
 perm_matrix(permutation) = Matrix{Float64}(I, length(permutation), length(permutation))[invperm(permutation), :]
 
-function substitution_show_off(
-    target::Substitution,
-    txt::Txt,
-    generations::Int,
-    spawns::Int,
-    reinforce_rate::Float64 = 0.5;
-    lineage_habit::Symbol = :ascent,
-    frame_skip::Int = 1,
-    ref_freq::Vector{Float64} = monogram_freq
-)
 
-    fitness_log = Vector{Float64}(undef, generations + 1)
-    div_log = Vector{Float64}(undef, generations + 1)
+mutable struct SubstitutionSolve
+    text::Txt
+    spawns::Int
+    lineage_habit::Symbol
 
+    ppm::PosProbMatrix
 
+    parent::Substitution
+    children::Vector{Substitution}
 
-    parent_sub = Substitution(target.size) # guesses FORWARDS substitution
+    fitness::Float64
 
-    ppm = PosProbMatrix(bbin_probabilities(txt, ref_freq), reinforce_rate)
-    set_yx!(ppm, parent_sub.mapping)
+    function SubstitutionSolve(
+        text::Txt, start::Substitution, spawns::Int, reinforce_rate::Float64 = 0.5;
+        lineage_habit::Symbol = :ascent,
+        ref_freq::Vector{Float64} = monogram_freq,
+        bbin::Bool = true
+        )
 
-
-
-    parent_fitness = quadgramlog(apply(parent_sub, txt))
-    fitness_log[1] = parent_fitness
-    div_log[1] = ppm_kldiv(ppm, target.mapping)
-
-    gr(format=:png)
-    p1 = heatmap(ppm.arr, clims = (0, 1), c = cgrad(["0x131314", "0xf02259"]), aspect_ratio = :equal, xlabel = "x", ylabel = "y", xticks = false, yticks = false, title = "ppM")
-    p2 = heatmap(perm_matrix(parent_sub.mapping), clims = (0, 1.3), c = cgrad(["0x131314", "0xe6e667"]), legend = :none, aspect_ratio = :equal, xlabel = "x", ylabel = "y", xticks = false, yticks = false, title = "Substitution Lineage")
-    p = plot(p1, p2)
-
-    anim = @animate for gen in 1:generations
-        println(gen)
-        swaps = draw(ppm, spawns)
-        new_substitutions = [switch(parent_sub, y1, y2) for (x1, x2, y1, y2) in swaps]
-        delta_F = [quadgramlog(new_sub(txt)) for new_sub in new_substitutions] .- parent_fitness
-        # generates new swaps from ppM and calculates dF
-
-
-        for ((x1, x2, y1, y2), dF) in zip(swaps, delta_F) # Update P with ALL the data
-            update!(ppm, x1, x2, y1, y2, dF)
+        if bbin
+            ppm = PosProbMatrix(bbin_probabilities(text, ref_freq), reinforce_rate)
+        else
+            ppm = PosProbMatrix(26, reinforce_rate)
         end
+        set_yx!(ppm, start.mapping)
 
-
-        parent_sub, dF = next_parent_dF(ppm, swaps, new_substitutions, delta_F, lineage_habit; parent = parent_sub)
-        parent_fitness += dF
-        # advance lineage
-
-
-        fitness_log[gen + 1] = parent_fitness
-        div_log[gen + 1] = ppm_kldiv(ppm, target.mapping)
-
-        p[1][1][:z] = ppm.arr
-        p[2][1][:z] = perm_matrix(parent_sub.mapping)
-
-    end every frame_skip
-
-    
-    gif(anim, "anim.gif")
-
-    invert!(parent_sub) # return the "solved" FORWARDS substitution
-
-    return ppm, parent_sub, fitness_log, div_log
-    # Reinforced Matrix // final Substitution in lineage // Vector of fitness values vs generations // Vector of divergence vs gen
+        new(
+            text,
+            spawns,
+            lineage_habit,
+            ppm,
+            start,
+            Vector{Substitution}(),
+            quadgramlog(apply(start, text))
+        )
+    end
 end
 
+function nextgen!(s::SubstitutionSolve)
+
+    swaps = draw(s.ppm, s.spawns)
+    s.children = [switch(s.parent, y1, y2) for (x1, x2, y1, y2) in swaps]
+    delta_F = [quadgramlog(new_sub(s.text)) for new_sub in s.children] .- s.fitness
+    # generates new swaps from ppM and calculates dF
 
 
-
-
-function bench_substitution_solve(
-    start::Substitution,
-    inv_target::Substitution,
-    txt::Txt,
-    generations::Int,
-    spawns::Int,
-    reinforce_rate::Float64 = 0.5;
-    lineage_habit::Symbol = :ascent,
-    ref_freq::Vector{Float64} = monogram_freq,
-    bbin::Bool = false
-)
-
-    fitness_log = Vector{Float64}(undef, generations + 1)
-    solved = false
-    solve_num = generations
-
-
-    parent_sub = start # guesses FORWARDS substitution
-
-    if bbin
-        ppm = PosProbMatrix(bbin_probabilities(txt, ref_freq), reinforce_rate)
-    else
-        ppm = PosProbMatrix(26, reinforce_rate)
-    end
-    set_yx!(ppm, parent_sub.mapping)
-
-
-
-    parent_fitness = quadgramlog(apply(parent_sub, txt))
-    fitness_log[1] = parent_fitness
-
-
-    for gen in 1:generations
-        swaps = draw(ppm, spawns)
-        new_substitutions = [switch(parent_sub, y1, y2) for (x1, x2, y1, y2) in swaps]
-        delta_F = [quadgramlog(new_sub(txt)) for new_sub in new_substitutions] .- parent_fitness
-        # generates new swaps from ppM and calculates dF
-
-
-        for ((x1, x2, y1, y2), dF) in zip(swaps, delta_F) # Update P with ALL the data
-            update!(ppm, x1, x2, y1, y2, dF)
-        end
-
-
-        parent_sub, dF = next_parent_dF(ppm, swaps, new_substitutions, delta_F, lineage_habit; parent = parent_sub)
-        parent_fitness += dF
-        # advance lineage
-
-
-        fitness_log[gen + 1] = parent_fitness
-
-        if !solved
-            if parent_sub == inv_target
-                solve_num = gen
-                solved = true
-            end
-        end
+    for ((x1, x2, y1, y2), dF) in zip(swaps, delta_F) # Update P with ALL the data
+        update!(s.ppm, x1, x2, y1, y2, dF)
     end
 
 
-    return fitness_log, solve_num
-end
-
-
-
-
-
-
-
-
-using Statistics
-function conv_substitution_solve(
-    start::Substitution,
-    target::Substitution,
-    txt::Txt,
-    generations::Int,
-    spawns::Int,
-    reinforce_rate::Float64 = 0.5;
-    lineage_habit::Symbol = :ascent,
-    ref_freq::Vector{Float64} = monogram_freq,
-    bbin::Bool = false
-)
-
-    div_log = Vector{Float64}(undef, generations + 1)
-    var_log = Vector{Float64}(undef, generations + 1)
-
-
-    parent_sub = start # guesses FORWARDS substitution
-
-    if bbin
-        ppm = PosProbMatrix(bbin_probabilities(txt, ref_freq), reinforce_rate)
-    else
-        ppm = PosProbMatrix(26, reinforce_rate)
-    end
-    set_yx!(ppm, parent_sub.mapping)
-
-
-
-    parent_fitness = quadgramlog(apply(parent_sub, txt))
-
-    div_log[1] = ppm_kldiv(ppm, target.mapping)
-    var_log[1] = sum(var(ppm.arr; dims = 2))
-
-
-    for gen in 1:generations
-        swaps = draw(ppm, spawns)
-        new_substitutions = [switch(parent_sub, y1, y2) for (x1, x2, y1, y2) in swaps]
-        delta_F = [quadgramlog(new_sub(txt)) for new_sub in new_substitutions] .- parent_fitness
-        # generates new swaps from ppM and calculates dF
-
-
-        for ((x1, x2, y1, y2), dF) in zip(swaps, delta_F) # Update P with ALL the data
-            update!(ppm, x1, x2, y1, y2, dF)
-        end
-
-
-        parent_sub, dF = next_parent_dF(ppm, swaps, new_substitutions, delta_F, lineage_habit; parent = parent_sub)
-        parent_fitness += dF
-        # advance lineage
-
-
-        div_log[gen + 1] = ppm_kldiv(ppm, target.mapping)
-        var_log[gen + 1] = sum(var(ppm.arr; dims = 2))
-    end
-
-
-    return div_log, var_log
-end
-
-
-
-
-function enddata_substitution_solve(
-    start::Substitution,
-    target::Substitution,
-    inv_target::Substitution,
-    txt::Txt,
-    generations::Int,
-    spawns::Int,
-    reinforce_rate::Float64 = 0.5;
-    lineage_habit::Symbol = :ascent,
-    ref_freq::Vector{Float64} = monogram_freq,
-    bbin::Bool = false
-)
-
-    solved = false
-    solve_num = generations + 1
-
-    parent_sub = start # guesses FORWARDS substitution
-
-    if bbin
-        ppm = PosProbMatrix(bbin_probabilities(txt, ref_freq), reinforce_rate)
-    else
-        ppm = PosProbMatrix(26, reinforce_rate)
-    end
-    set_yx!(ppm, parent_sub.mapping)
-
-
-
-    parent_fitness = quadgramlog(apply(parent_sub, txt))
-
-
-    for gen in 1:generations
-        swaps = draw(ppm, spawns)
-        new_substitutions = [switch(parent_sub, y1, y2) for (x1, x2, y1, y2) in swaps]
-        delta_F = [quadgramlog(new_sub(txt)) for new_sub in new_substitutions] .- parent_fitness
-        # generates new swaps from ppM and calculates dF
-
-
-        for ((x1, x2, y1, y2), dF) in zip(swaps, delta_F) # Update P with ALL the data
-            update!(ppm, x1, x2, y1, y2, dF)
-        end
-
-
-        parent_sub, dF = next_parent_dF(ppm, swaps, new_substitutions, delta_F, lineage_habit; parent = parent_sub)
-        parent_fitness += dF
-        # advance lineage
-
-
-        if !solved
-            if parent_sub == inv_target
-                solve_num = gen
-                solved = true
-            end
-        end
-    end
-
-    div = ppm_kldiv(ppm, target.mapping)
-
-    return parent_fitness, div, solve_num
+    s.parent, dF = next_parent_dF(s.ppm, swaps, s.children, delta_F, s.lineage_habit; parent = s.parent)
+    s.fitness += dF
+    # advance lineage
 end

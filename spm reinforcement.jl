@@ -1,6 +1,7 @@
-include("permutation.jl")
+using RxCiphers
 import LinearAlgebra.checksquare, Base.getindex, Base.setindex!
 import StatsBase.sample, StatsBase.pweights
+import Statistics.mean
 
 
 mutable struct SsrProbMatrix
@@ -23,11 +24,23 @@ mutable struct SsrProbMatrix
 end
 
 function SsrProbMatrix(n::Int, update_rate::Float64) ::SsrProbMatrix
-    return SsrProbMatrix(fill(1 / n, (n,n)), n, update_rate)
+    m = fill(1 / (n-1), (n,n))
+    for i in 1:n
+        m[i, i] = 0.
+    end
+
+    return SsrProbMatrix(m, n, update_rate)
 end
 
 function SsrProbMatrix(a::Matrix{Float64}, update_rate::Float64) ::SsrProbMatrix
-    return SsrProbMatrix(normalise!(clamp.(a, 0., 1.), 2), checksquare(a), update_rate)
+    n = checksquare(a)
+
+    m = clamp.(a, 0., 1.)
+    for i in 1:n
+        m[i, i] = 0.
+    end
+    
+    return SsrProbMatrix(normalise!(m, 2), n, update_rate)
 end
 
 function set_xy!(spm::SsrProbMatrix, x_to_y::Vector{Int})
@@ -114,7 +127,7 @@ end
 
 
 bernoulli(w::Float64) = rand() < w
-
+import Statistics.stdm
 function draw(spm::SsrProbMatrix, number::Int, f::Function = identity) ::Vector{NTuple{6, Int}}
     
     draw_matrix = f(copy(spm.arr))
@@ -149,7 +162,9 @@ function draw(spm::SsrProbMatrix, number::Int, f::Function = identity) ::Vector{
                 y3[i] = spm.xy[y3[i]]
             end
         end
+
     end
+
 
     return collect(zip(x1, x2, x3, y1, y2, y3))
 end
@@ -317,14 +332,34 @@ function follow_scores(matrix::Matrix{Int}) ::Matrix{Float64}
     return follow_scores
 end
 
+function lineage_certainty(spm::SsrProbMatrix)
+    avg = 0.
+
+    for x in 1:spm.size
+        avg += spm[x, spm.xy[x]]
+    end
+
+    return avg / spm.size
+end
+
+
 #################################################################################################################
 
 
+function forget!(spm::SsrProbMatrix, a::Float64)
 
+    S_bar = 1 / (spm.size - 1)
+    spm.arr .-= S_bar
+    spm.arr *= a
+    spm.arr .+= S_bar
 
+    @inbounds for i in 1:spm.size
+        spm.arr[i, i] = 0.
+    end
 
+    return spm
 
-
+end
 
 
 
@@ -338,81 +373,6 @@ using Plots
 
 # x (token) -> y (successor in permutation)
 # this solves for the inverse permutation, then inverts it
-function debug_permutation_solve(
-    target::Permutation,
-    txt::Txt,
-    generations::Int,
-    spawns::Int,
-    reinforce_rate::Float64 = 0.5;
-    lineage_habit::Symbol = :ascent,
-    frame_skip::Int = 1,
-)
-    N = target.n
-    S = N + 1
-    target = invert(target)
-    fitness_log = Vector{Float64}(undef, generations + 1)
-    div_log = Vector{Float64}(undef, generations + 1)
-    target_xy = splitsuccessors(target.permutation)
-
-
-
-    parent_perm = invPermutation(N, true) # guesses INVERSE permutation
-
-    follow_scr = exp10.(follow_scores(unshape(txt.tokenised, parent_perm)))
-    blanks = fill(1e-10, (S, S))
-    blanks[1:N, 1:N] = follow_scr
-    spm = SsrProbMatrix(blanks, reinforce_rate)
-    set_xy!(spm, splitsuccessors(parent_perm.permutation))
-
-
-
-    parent_fitness = quadgramlog(apply(parent_perm, txt))
-    fitness_log[1] = parent_fitness
-    div_log[1] = spm_kldiv(spm, target_xy)
-
-    gr(format=:png)
-    p = heatmap(spm.arr, clims = (0, 1), aspect_ratio = :equal, xlabel = "x", ylabel = "y", xticks = false, yticks = false)
-
-    anim = @animate for gen in 1:generations
-        println(gen)
-        splices = draw(spm, spawns)
-
-        parent_split_perm = [S ; parent_perm.permutation]
-        new_perms = [invPermutation(circorigin(splice(parent_split_perm, 
-        findfirst(==(y1), parent_split_perm), 
-        findfirst(==(y2), parent_split_perm), 
-        findfirst(==(x3), parent_split_perm)), S)[2:end], true) for (x1, x2, x3, y1, y2, y3) in splices]
-
-        delta_F = [quadgramlog(new_p(txt)) for new_p in new_perms] .- parent_fitness
-        # generates new splices from ppM and calculates dF
-
-
-        for ((x1, x2, x3, y1, y2, y3), dF) in zip(splices, delta_F) # Update P with ALL the data
-            update!(spm, x1, x2, x3, y1, y2, y3, dF)
-        end
-
-
-        parent_perm, dF = next_parent_dF(spm, splices, new_perms, delta_F, lineage_habit; parent = parent_perm)
-        parent_fitness += dF
-        # advance lineage
-
-
-        fitness_log[gen + 1] = parent_fitness
-        div_log[gen + 1] = spm_kldiv(spm, target_xy)
-
-        p[1][1][:z] = spm.arr
-
-    end every frame_skip
-
-    
-    gif(anim, "anim.gif")
-
-    invert!(parent_perm) # return the "solved" FORWARDS permutation
-
-    return spm, parent_perm, fitness_log, div_log
-    # Reinforced Matrix // final Substitution in lineage // Vector of fitness values vs generations // Vector of divergence vs gen
-end
-
 
 function permutation_solve(
     N::Int,
@@ -468,6 +428,196 @@ end
 
 
 
+mutable struct PermutationSolve
+    text::Txt
+    spawns::Int
+    lineage_habit::Symbol
+    N::Int
+
+    amnesia_coeff::Float64
+    amnesia_threshold::Float64
+    has_amnesia::Bool
+
+    spm::SsrProbMatrix
+
+    parent::Permutation
+    children::Vector{Permutation}
+
+    fitness::Float64
+
+    function PermutationSolve(
+        text::Txt, N::Int, spawns::Int, reinforce_rate::Float64 = 0.5;
+        lineage_habit::Symbol = :ascent,
+        fscore::Bool = true,
+        amnesia_threshold::Float64 = 0.95,
+        amnesia_coeff::Float64 = 1.0
+        )
+
+        e = ArgumentError("Amnesia coefficient must be positive and not greater than 1.0")
+        if !(0.0 < amnesia_coeff <= 1.0)
+            throw(e)
+        elseif amnesia_coeff == 1.0
+            has_amnesia = false
+        elseif amnesia_threshold >= 1.0
+            has_amnesia = false
+        else
+            has_amnesia = true
+        end
+
+        S = N + 1
+
+        start = invPermutation(N, true) # guesses INVERSE permutation
+
+        if fscore
+            follow_scr = exp10.(follow_scores(RxCiphers.unshape(text.tokenised, start)))
+            blanks = ones(Float64, (S, S)) # For the extra split token
+            blanks[1:N, 1:N] = follow_scr # stitch in the follow matrix
+            blanks[1:N, S] = mean(follow_scr; dims = 2)
+            spm = SsrProbMatrix(blanks, reinforce_rate)
+            
+        else
+            spm = SsrProbMatrix(S, reinforce_rate)
+        end
+        set_xy!(spm, splitsuccessors(start.permutation))
+
+        new(
+            text,
+            spawns,
+            lineage_habit,
+            S,
+            amnesia_coeff,
+            amnesia_threshold,
+            has_amnesia,
+            spm,
+            start,
+            Vector{Permutation}(),
+            quadgramlog(apply(start, text))
+        )
+    end
+end
+
+
+function nextgen!(s::PermutationSolve)
+    splices = draw(s.spm, s.spawns)
+
+    parent_split_perm = [s.N ; s.parent.permutation]
+    s.children = [invPermutation(RxCiphers.circorigin(RxCiphers.splice(parent_split_perm, 
+    findfirst(==(y1), parent_split_perm), 
+    findfirst(==(y2), parent_split_perm), 
+    findfirst(==(x3), parent_split_perm)), s.N)[2:end], true) for (x1, x2, x3, y1, y2, y3) in splices]
+
+    delta_F = [quadgramlog(new_p(s.text)) for new_p in s.children] .- s.fitness
+    # generates new splices from ppM and calculates dF
+
+
+    for ((x1, x2, x3, y1, y2, y3), dF) in zip(splices, delta_F) # Update P with ALL the data
+        update!(s.spm, x1, x2, x3, y1, y2, y3, dF)
+    end
+
+
+    s.parent, dF = next_parent_dF(s.spm, splices, s.children, delta_F, s.lineage_habit; parent = s.parent)
+    s.fitness += dF
+    # advance lineage
+
+    if s.has_amnesia
+        if lineage_certainty(s.spm) > s.amnesia_threshold
+            forget!(s.spm, s.amnesia_coeff)
+        end
+    end
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+mutable struct MultPermutationSolve
+    lineage_num::Int
+
+    text::Txt
+    spawns::Int
+    lineage_habit::Symbol
+    N::Int
+
+    spm::SsrProbMatrix
+
+    parent::Vector{Permutation}
+    children::Matrix{Permutation}
+
+    fitness::Float64
+
+    function MultPermutationSolve(
+        lineage_num::Int, text::Txt, N::Int, spawns::Int, reinforce_rate::Float64 = 0.5;
+        lineage_habit::Symbol = :ascent,
+        fscore::Bool = true
+        )
+
+        S = N + 1
+
+        starts = [invPermutation(N, true)] # guesses INVERSE permutation
+
+        if fscore
+            follow_scr = exp10.(follow_scores(RxCiphers.unshape(text.tokenised, start)))
+            blanks = fill(1e-10, (S, S)) # For the extra split token
+            blanks[1:N, 1:N] = follow_scr # stitch in the follow matrix
+            spm = SsrProbMatrix(blanks, reinforce_rate)
+            
+        else
+            spm = SsrProbMatrix(S, reinforce_rate)
+        end
+        set_xy!(spm, splitsuccessors(start.permutation))
+
+        new(
+            text,
+            spawns,
+            lineage_habit,
+            S,
+            spm,
+            starts,
+            Matrix{Permutation}(),
+            quadgramlog(apply(start, text))
+        )
+    end
+end
+
+function nextgen!(s::MultPermutationSolve)
+
+    splices = draw(s.spm, s.spawns)
+
+    parent_split_perm = [s.N ; s.parent.permutation]
+    new_perms = [invPermutation(RxCiphers.circorigin(RxCiphers.splice(parent_split_perm, 
+    findfirst(==(y1), parent_split_perm), 
+    findfirst(==(y2), parent_split_perm), 
+    findfirst(==(x3), parent_split_perm)), s.N)[2:end], true) for (x1, x2, x3, y1, y2, y3) in splices]
+
+    delta_F = [quadgramlog(new_p(s.text)) for new_p in new_perms] .- s.fitness
+    # generates new splices from ppM and calculates dF
+
+
+    for ((x1, x2, x3, y1, y2, y3), dF) in zip(splices, delta_F) # Update P with ALL the data
+        update!(s.spm, x1, x2, x3, y1, y2, y3, dF)
+    end
+
+
+    s.parent, dF = next_parent_dF(s.spm, splices, new_perms, delta_F, s.lineage_habit; parent = s.parent)
+    s.fitness += dF
+    # advance lineage
+end
+
 
 
 
@@ -478,81 +628,4 @@ end
 
 using LinearAlgebra
 perm_matrix(permutation) = Matrix{Float64}(I, length(permutation), length(permutation))[checkperm(permutation), :]
-
-function permutation_show_off(
-    target::Permutation,
-    txt::Txt,
-    generations::Int,
-    spawns::Int,
-    reinforce_rate::Float64 = 0.5;
-    lineage_habit::Symbol = :ascent,
-    frame_skip::Int = 1,
-)
-    N = target.n
-    S = N + 1
-    target = invert(target)
-    fitness_log = Vector{Float64}(undef, generations + 1)
-    div_log = Vector{Float64}(undef, generations + 1)
-    target_xy = splitsuccessors(target.permutation)
-
-
-
-    parent_perm = invPermutation(N, true) # guesses INVERSE permutation
-
-    follow_scr = exp10.(follow_scores(unshape(txt.tokenised, parent_perm)))
-    blanks = fill(1e-10, (S, S))
-    blanks[1:N, 1:N] = follow_scr
-    spm = SsrProbMatrix(blanks, reinforce_rate)
-    set_xy!(spm, splitsuccessors(parent_perm.permutation))
-
-
-
-    parent_fitness = quadgramlog(apply(parent_perm, txt))
-    fitness_log[1] = parent_fitness
-    div_log[1] = spm_kldiv(spm, target_xy)
-
-    gr(format=:png)
-    p1 = heatmap(spm.arr, clims = (0, 1), c = cgrad(["0x131314", "0x0048ff"]), aspect_ratio = :equal, xlabel = "x", ylabel = "y", xticks = false, yticks = false, title = "spM")
-    p2 = heatmap(perm_matrix(parent_perm.permutation), clims = (0, 1), c = cgrad(["0x131314", "0x30b891"]), legend = :none, aspect_ratio = :equal, xlabel = "x", ylabel = "y", xticks = false, yticks = false, title = "Permutation Lineage")
-    p = plot(p1, p2)
-
-    anim = @animate for gen in 1:generations
-        println(gen)
-        splices = draw(spm, spawns)
-
-        parent_split_perm = [S ; parent_perm.permutation]
-        new_perms = [invPermutation(circorigin(splice(parent_split_perm, 
-        findfirst(==(y1), parent_split_perm), 
-        findfirst(==(y2), parent_split_perm), 
-        findfirst(==(x3), parent_split_perm)), S)[2:end], true) for (x1, x2, x3, y1, y2, y3) in splices]
-
-        delta_F = [quadgramlog(new_p(txt)) for new_p in new_perms] .- parent_fitness
-        # generates new splices from ppM and calculates dF
-
-
-        for ((x1, x2, x3, y1, y2, y3), dF) in zip(splices, delta_F) # Update P with ALL the data
-            update!(spm, x1, x2, x3, y1, y2, y3, dF)
-        end
-
-
-        parent_perm, dF = next_parent_dF(spm, splices, new_perms, delta_F, lineage_habit; parent = parent_perm)
-        parent_fitness += dF
-        # advance lineage
-
-
-        fitness_log[gen + 1] = parent_fitness
-        div_log[gen + 1] = spm_kldiv(spm, target_xy)
-
-        p[1][1][:z] = spm.arr
-        p[2][1][:z] = perm_matrix(parent_perm.permutation)
-
-    end every frame_skip
-
-    
-    gif(anim, "anim.gif")
-
-    invert!(parent_perm) # return the "solved" FORWARDS permutation
-
-    return spm, parent_perm, fitness_log, div_log
-    # Reinforced Matrix // final Substitution in lineage // Vector of fitness values vs generations // Vector of divergence vs gen
-end
+perm_matrix(perma, permb) = perm_matrix(invperm(perma)[checkperm(permb)])

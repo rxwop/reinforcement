@@ -6,10 +6,7 @@ include("mycolors.jl")
 
 using Plots.PlotMeasures
 
-p = plot(xlims = (0, 100), ylims = (0, Inf),
-background_color = space,
-foreground_color = cocoa[5],
-margins = 20px
+p = plot(thickness_scaling = 1.15
 )
 
 
@@ -18,9 +15,9 @@ using Statistics
 avgdiv = mean(divergences; dims = 2)
 avgvar = mean(variances; dims = 2)
 
-plot!(p, 0:100, avgdiv, linewidth = 3, label = "Mean KL-Divergence", line_z = avgdiv, color = cgrad(viridian[1:2]), colorbar = false)
+plot!(p, 0:100, avgdiv, linewidth = 2, label = "Mean KL Divergence")
 
-plot!(p, 0:100, avgvar, linewidth = 3, label = "Mean variance", line_z = avgvar, color = cgrad(viridian[3:4]), colorbar = false)
+plot!(p, 0:100, avgvar, linewidth = 2, label = "Mean Col. Variance Sum")
 
 xlabel!("Generation")
 

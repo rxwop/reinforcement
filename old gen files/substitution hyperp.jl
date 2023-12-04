@@ -21,8 +21,8 @@ print("Beginning benchmark...")
 
 
 using IterTools
-iter_rate = 1:10:50
-iter_spawns = 1:10:100
+iter_rate = 0:2:20
+iter_spawns = 1:5:35
 iter = IterTools.product(iter_rate, iter_spawns)
 
 m_size = size(iter)
@@ -60,7 +60,8 @@ for (i, (rt, sp)) in enumerate(iter)
     fitnesses[i] = run_fitnesses
     solve_lengths[i] = run_solves
     divergences[i] = run_divergences
-    println(i)
+    println("prog: $i    rate: $rt    spawns: $sp")
+    println(mean(run_solves))
 end
 
 
@@ -69,4 +70,4 @@ end
 name = "_fbbin"
 
 using JLD2
-jldsave("hyperp" * name * ".jld2"; fitnesses, solve_lengths, divergences)
+jldsave("hyperp narrow1" * name * ".jld2"; fitnesses, solve_lengths, divergences)

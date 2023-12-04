@@ -1,9 +1,9 @@
-using RxCiphers
+import RxCiphers
 import Base.show
 using Combinatorics
+const NULL_TOKEN = 0
 
-
-mutable struct Permutation <: AbstractCipher
+mutable struct Permutation <: RxCiphers.AbstractCipher
     n::Int
     permutation::Vector{Int}
 
@@ -24,28 +24,28 @@ invPermutation(permutation::Vector{Int}, remove_nulls::Bool = false) = Permutati
 invPermutation(n::Int, remove_nulls::Bool = false) = Permutation(n, collect(1:n), remove_nulls, true)
 
 function invert!(P::Permutation)
-    switch_invert_tag!(P)
+    RxCiphers.switch_invert_tag!(P)
     P.permutation = invperm(P.permutation)
     return P
 end
 
 
 function switch(P::Permutation, posa::Int, posb::Int) ::Permutation
-    return Permutation(P.n, switch(P.permutation, posa, posb), P.remove_nulls, P.inverted)
+    return Permutation(P.n, RxCiphers.switch(P.permutation, posa, posb), P.remove_nulls, P.inverted)
 end
 
 function switch!(P::Permutation, posa::Int, posb::Int) ::Permutation
-    switch!(P.permutation, posa, posb)
+    RxCiphers.switch!(P.permutation, posa, posb)
     return P
 end
 
 function splice!(P::Permutation, ind::Int, start::Int, finish::Int) ::Permutation
-    splice!(P.permutation, ind, start, finish)
+    RxCiphers.splice!(P.permutation, ind, start, finish)
     return P
 end
 
 function splice(P::Permutation, ind::Int, start::Int, finish::Int) ::Permutation
-    return Permutation(P.n, splice(P.permutation, ind, start, finish), P.remove_nulls, P.inverted)
+    return Permutation(P.n, RxCiphers.splice(P.permutation, ind, start, finish), P.remove_nulls, P.inverted)
 end
 
 
@@ -101,7 +101,7 @@ end
 
 
 
-function apply(T::Permutation, vect::Vector{Int}; safety_checks::Txt) ::Vector{Int}
+function RxCiphers.apply(T::Permutation, vect::Vector{Int}; safety_checks::Txt) ::Vector{Int}
     if T.inverted # inverse application
         new_tokens = unshape(vect, T)
         new_tokens = vec(new_tokens[T.permutation, :])

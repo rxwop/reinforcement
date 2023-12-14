@@ -356,3 +356,75 @@ function nextgen!(s::SubstitutionSolve)
     s.fitness += dF
     # advance lineage
 end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+mutable struct BiSubSolve
+    text::Txt
+    spawns::Int
+    lineage_habit::Symbol
+
+    ppm::PosProbMatrix
+
+    parent::Substitution
+    children::Vector{Substitution}
+
+    fitness::Float64
+
+    function BiSubSolve(
+        text::Txt, start::Substitution, spawns::Int, reinforce_rate::Float64 = 0.5;
+        lineage_habit::Symbol = :ascent,
+        ref_freq::Vector{Float64} = monogram_freq,
+        bbin::Bool = true
+        )
+
+        ppm = PosProbMatrix(676, reinforce_rate)
+
+        set_yx!(ppm, start.mapping)
+
+        new(
+            text,
+            spawns,
+            lineage_habit,
+            ppm,
+            start,
+            Vector{Substitution}(),
+            quadgramlog(nchar!(apply(start, text), 1))
+        )
+    end
+end
+
+function nextgen!(s::BiSubSolve)
+
+    swaps = draw(s.ppm, s.spawns)
+    s.children = [switch(s.parent, y1, y2) for (x1, x2, y1, y2) in swaps]
+    delta_F = [quadgramlog(nchar!(new_sub(s.text), 1)) for new_sub in s.children] .- s.fitness
+    # generates new swaps from ppM and calculates dF
+
+
+    for ((x1, x2, y1, y2), dF) in zip(swaps, delta_F) # Update P with ALL the data
+        update!(s.ppm, x1, x2, y1, y2, dF)
+    end
+
+
+    s.parent, dF = next_parent_dF(s.ppm, swaps, s.children, delta_F, s.lineage_habit; parent = s.parent)
+    s.fitness += dF
+    # advance lineage
+end
